@@ -41,7 +41,7 @@ jobs:
 
       - name: Test
         if: ${{ !inputs.skip_tests }}
-        run: dotnet test ${{ inputs.solution }} --no-build --verbosity normal
+        run: dotnet test ${{ inputs.solution }} --no-build --configuration Release --verbosity normal
 
       - name: Pack
         run: |
