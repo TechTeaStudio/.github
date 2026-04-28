@@ -1,0 +1,71 @@
+name: NuGet Publish (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      solution:
+        description: Path to the .sln file
+        required: true
+        type: string
+      projects_glob:
+        description: Glob pattern for packable .csproj files (e.g. "source/*/*.csproj")
+        required: true
+        type: string
+      skip_tests:
+        description: Skip test step (for repos without test projects)
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      NUGET_API_KEY:
+        required: true
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore ${{ inputs.solution }}
+
+      - name: Build
+        run: dotnet build ${{ inputs.solution }} --no-restore --configuration Release
+
+      - name: Test
+        if: ${{ !inputs.skip_tests }}
+        run: dotnet test ${{ inputs.solution }} --no-build --verbosity normal
+
+      - name: Pack
+        run: |
+          mkdir -p artifacts
+          for proj in ${{ inputs.projects_glob }}; do
+            VERSION=$(grep -Po '(?<=<Version>)[^<]+' "$proj" || true)
+            if [[ -z "$VERSION" ]]; then
+              echo "Skipping $proj — no <Version> tag"
+              continue
+            fi
+            echo "Packing $proj @ $VERSION"
+            dotnet pack "$proj" \
+              --configuration Release \
+              --output ./artifacts \
+              --no-build \
+              /p:PackageVersion=$VERSION
+          done
+
+      - name: Push to nuget.org
+        run: |
+          for pkg in ./artifacts/*.nupkg; do
+            echo "Pushing $pkg"
+            dotnet nuget push "$pkg" \
+              --source https://api.nuget.org/v3/index.json \
+              --api-key ${{ secrets.NUGET_API_KEY }} \
+              --skip-duplicate
+          done
