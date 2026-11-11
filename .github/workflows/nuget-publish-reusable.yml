@@ -16,25 +16,21 @@ on:
         required: false
         type: boolean
         default: false
-      nuget_user:
-        description: nuget.org profile name that owns the trusted publishing policy (not an e-mail)
-        required: false
-        type: string
-        default: RonaldRyan
     secrets:
-      # No longer used: publishing goes through nuget.org Trusted Publishing (OIDC).
-      # Kept optional so a caller that still passes it does not fail to start.
+      # No longer used. Kept optional so a caller that still passes it does not fail to start.
       NUGET_API_KEY:
         required: false
 
+# This workflow builds, tests and packs. It does NOT push to nuget.org, and it cannot:
+# nuget.org Trusted Publishing only accepts a login from a job defined in a workflow file of
+# the package's own repository (the token's job_workflow_ref must start with
+# <owner>/<repo>/.github/workflows/). A job of this shared file carries TechTeaStudio/.github
+# there and is refused. So each repository's dotnet.yml has its own small publish job that
+# downloads the "nupkg" artifact produced here, logs in with NuGet/login and pushes.
 jobs:
-  build-and-publish:
+  build-and-pack:
     runs-on: ubuntu-latest
-    # id-token lets the job ask GitHub for an OIDC token, which nuget.org exchanges for a
-    # one-hour API key. The calling job must grant the same permission: a called workflow
-    # cannot hold more than its caller.
     permissions:
-      id-token: write
       contents: read
     steps:
       - uses: actions/checkout@v4
@@ -74,23 +70,12 @@ jobs:
               /p:PackageVersion=$VERSION
           done
 
-      # Publishing happens on a push only. A pull request builds, tests and packs, nothing more.
-      # The login sits right before the push: the key lives one hour and one OIDC token buys
-      # exactly one key, so every package of the repository goes out in the single step below.
-      - name: NuGet login (OIDC, temporary API key)
-        if: github.event_name == 'push'
-        uses: NuGet/login@v1
-        id: login
+      # The packages (and symbol packages, where a project produces them) for the caller's
+      # publish job. One day is plenty: that job runs right after this one.
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
         with:
-          user: ${{ inputs.nuget_user }}
-
-      - name: Push to nuget.org
-        if: github.event_name == 'push'
-        run: |
-          for pkg in ./artifacts/*.nupkg; do
-            echo "Pushing $pkg"
-            dotnet nuget push "$pkg" \
-              --source https://api.nuget.org/v3/index.json \
-              --api-key ${{ steps.login.outputs.NUGET_API_KEY }} \
-              --skip-duplicate
-          done
+          name: nupkg
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 1
