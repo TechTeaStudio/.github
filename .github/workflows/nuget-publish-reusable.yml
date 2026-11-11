@@ -16,13 +16,26 @@ on:
         required: false
         type: boolean
         default: false
+      nuget_user:
+        description: nuget.org profile name that owns the trusted publishing policy (not an e-mail)
+        required: false
+        type: string
+        default: RonaldRyan
     secrets:
+      # No longer used: publishing goes through nuget.org Trusted Publishing (OIDC).
+      # Kept optional so a caller that still passes it does not fail to start.
       NUGET_API_KEY:
-        required: true
+        required: false
 
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
+    # id-token lets the job ask GitHub for an OIDC token, which nuget.org exchanges for a
+    # one-hour API key. The calling job must grant the same permission: a called workflow
+    # cannot hold more than its caller.
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -61,12 +74,23 @@ jobs:
               /p:PackageVersion=$VERSION
           done
 
+      # Publishing happens on a push only. A pull request builds, tests and packs, nothing more.
+      # The login sits right before the push: the key lives one hour and one OIDC token buys
+      # exactly one key, so every package of the repository goes out in the single step below.
+      - name: NuGet login (OIDC, temporary API key)
+        if: github.event_name == 'push'
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ inputs.nuget_user }}
+
       - name: Push to nuget.org
+        if: github.event_name == 'push'
         run: |
           for pkg in ./artifacts/*.nupkg; do
             echo "Pushing $pkg"
             dotnet nuget push "$pkg" \
               --source https://api.nuget.org/v3/index.json \
-              --api-key ${{ secrets.NUGET_API_KEY }} \
+              --api-key ${{ steps.login.outputs.NUGET_API_KEY }} \
               --skip-duplicate
           done
